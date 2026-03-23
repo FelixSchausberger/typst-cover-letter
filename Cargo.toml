@@ -1,0 +1,25 @@
+[package]
+name = "coverletter"
+version = "0.1.0"
+edition = "2021"
+authors = ["Felix Schausberger"]
+description = "Cover letter management CLI"
+license = "MIT"
+repository = "https://github.com/FelixSchausberger/typst-cover-letter"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+thiserror = "1"
+dialoguer = "0.11"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+chrono = "0.4"
+walkdir = "2"
+rayon = "1"
+similar = "2"
+env_logger = "0.11"
+log = "0.4"
+
+[dev-dependencies]
+tempfile = "3"

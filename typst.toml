@@ -1,0 +1,5 @@
+[package]
+name = "cover-letter"
+version = "0.1.0"
+entrypoint = "lib.typ"
+authors = ["Felix Schausberger"]
