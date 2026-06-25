@@ -3,12 +3,13 @@ use crate::template::{self, TemplateArgs};
 use anyhow::{Context, Result};
 use chrono::Local;
 use dialoguer::{Confirm, Input, Select};
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub fn run(args: NewArgs) -> Result<()> {
-    let company = match args.company {
-        Some(c) => c,
+    let company = match &args.company {
+        Some(c) => c.clone(),
         None => Input::new().with_prompt("Company").interact_text()?,
     };
 
@@ -21,21 +22,27 @@ pub fn run(args: NewArgs) -> Result<()> {
         .with_prompt("Contact person (optional, press Enter to skip)")
         .allow_empty(true)
         .interact_text()?;
-    let contact = if contact.is_empty() {
-        None
+    let (contact, contact_gender) = if contact.is_empty() {
+        (None, None)
     } else {
-        Some(contact)
+        let genders = &["Female", "Male"];
+        let idx = Select::new()
+            .with_prompt("Gender")
+            .items(genders)
+            .default(0)
+            .interact()?;
+        (Some(contact), Some(["female", "male"][idx]))
     };
 
-    let position = match args.position {
-        Some(p) => p,
+    let position = match &args.position {
+        Some(p) => p.clone(),
         None => Input::new()
             .with_prompt("Job position / title")
             .interact_text()?,
     };
 
-    let lang = match args.lang {
-        Some(l) => l,
+    let lang = match &args.lang {
+        Some(l) => l.clone(),
         None => {
             let langs = &["de", "en"];
             let idx = Select::new()
@@ -47,9 +54,16 @@ pub fn run(args: NewArgs) -> Result<()> {
         }
     };
 
+    let sender_name = match &args.sender_name {
+        Some(n) => n.clone(),
+        None => Input::new().with_prompt("Your name").interact_text()?,
+    };
+
+    let (sender_street, sender_city) = resolve_sender_address(&args)?;
+
     let today = Local::now().format("%d.%m.%Y").to_string();
-    let date = match args.date {
-        Some(d) => d,
+    let date = match &args.date {
+        Some(d) => d.clone(),
         None => Input::new()
             .with_prompt("Date")
             .default(today)
@@ -64,7 +78,12 @@ pub fn run(args: NewArgs) -> Result<()> {
         sanitize(&company),
         sanitize(&position)
     );
-    let base = args.dir.unwrap_or_else(|| PathBuf::from("."));
+    let base = args.dir.unwrap_or_else(|| {
+        crate::config::load()
+            .ok()
+            .and_then(|c| c.output?.dir.map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("."))
+    });
     let app_dir = base.join(&dir_name);
     let typ_file = app_dir.join("Cover_letter_Schausberger.typ");
 
@@ -75,9 +94,13 @@ pub fn run(args: NewArgs) -> Result<()> {
         company: &company,
         address: &address,
         contact: contact.as_deref(),
+        contact_gender: contact_gender,
         position: &position,
         lang: &lang,
         date: &date,
+        sender_name: &sender_name,
+        sender_street: &sender_street,
+        sender_city: &sender_city,
     });
 
     std::fs::write(&typ_file, &content)
@@ -94,13 +117,78 @@ pub fn run(args: NewArgs) -> Result<()> {
 
     if compile {
         crate::cmd::build::compile_file(&typ_file, true)?;
-        println!(
-            "PDF written to {}",
-            typ_file.with_extension("pdf").display()
-        );
     }
 
     Ok(())
+}
+
+fn resolve_sender_address(args: &NewArgs) -> Result<(String, String)> {
+    // CLI flags take priority
+    if let (Some(street), Some(city)) = (&args.sender_street, &args.sender_city) {
+        return Ok((street.clone(), city.clone()));
+    }
+
+    // Try sops secret next
+    if let Ok(addr) = decrypt_sops_address() {
+        return Ok(split_address(&addr));
+    }
+
+    // Fall back to interactive prompts
+    let street = match &args.sender_street {
+        Some(s) => s.clone(),
+        None => Input::new().with_prompt("Your street").interact_text()?,
+    };
+    let city = match &args.sender_city {
+        Some(c) => c.clone(),
+        None => Input::new().with_prompt("Your city").interact_text()?,
+    };
+    Ok((street, city))
+}
+
+fn split_address(addr: &str) -> (String, String) {
+    if let Some(idx) = addr.find('\n') {
+        let street = addr[..idx].trim().to_string();
+        let city = addr[idx + 1..].trim().to_string();
+        return (street, city);
+    }
+    if let Some(idx) = addr.find(", ") {
+        let street = addr[..idx].trim().to_string();
+        let city = addr[idx + 2..].trim().to_string();
+        return (street, city);
+    }
+    (addr.to_string(), String::new())
+}
+
+#[derive(Deserialize)]
+struct Secret {
+    private: Private,
+}
+
+#[derive(Deserialize)]
+struct Private {
+    address: String,
+}
+
+fn decrypt_sops_address() -> Result<String> {
+    let secret_path = PathBuf::from("secrets/secrets.yaml");
+    if !secret_path.is_file() {
+        anyhow::bail!("secrets/secrets.yaml not found");
+    }
+
+    let output = Command::new("sops")
+        .args(["-d", "secrets/secrets.yaml"])
+        .output()
+        .context("Failed to run sops — is it installed?")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("sops decryption failed: {}", stderr.trim());
+    }
+
+    let secret: Secret =
+        serde_yaml::from_slice(&output.stdout).context("Failed to parse sops output")?;
+
+    Ok(secret.private.address)
 }
 
 fn open_editor(path: &Path) -> Result<()> {

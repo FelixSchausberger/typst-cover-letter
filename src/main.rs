@@ -3,6 +3,7 @@ use clap::Parser;
 
 mod cli;
 mod cmd;
+mod config;
 mod template;
 
 fn main() -> Result<()> {

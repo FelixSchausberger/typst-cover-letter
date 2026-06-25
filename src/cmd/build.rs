@@ -14,7 +14,6 @@ pub fn run(args: BuildArgs) -> Result<()> {
         let path = args.path.unwrap_or_else(|| PathBuf::from("."));
         let typ_file = resolve_typ_path(&path)?;
         compile_file(&typ_file, args.force)?;
-        println!("✓ {}", typ_file.display());
         Ok(())
     }
 }
@@ -54,7 +53,6 @@ fn build_all(base: &Path, force: bool) -> Result<()> {
                 skipped += 1;
             }
             Ok(()) => {
-                println!("✓ {}", path.display());
                 ok += 1;
             }
             Err(e) => {
@@ -93,7 +91,91 @@ pub fn compile_file(typ_path: &Path, force: bool) -> Result<()> {
         );
     }
 
+    let word_count = count_body_words(typ_path).unwrap_or(0);
+    let page_count = pdf_page_count(&typ_path.with_extension("pdf")).unwrap_or(0);
+
+    let (page_label, warning) = if page_count == 0 {
+        ("? pages".to_string(), String::new())
+    } else if page_count == 1 {
+        ("1 page".to_string(), String::new())
+    } else {
+        (format!("{} pages", page_count), " ⚠️".to_string())
+    };
+
+    println!(
+        "✓ {}  ({} words, {}){}",
+        typ_path.display(),
+        word_count,
+        page_label,
+        warning,
+    );
+
     Ok(())
+}
+
+fn count_body_words(path: &Path) -> Result<usize> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+
+    let mut count = 0usize;
+    let mut in_show = false;
+    let mut depth = 0u32;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        if trimmed.starts_with("#import") {
+            continue;
+        }
+
+        if trimmed.starts_with("#show:") {
+            in_show = true;
+            depth = trimmed.bytes().filter(|&b| b == b'(').count() as u32
+                - trimmed.bytes().filter(|&b| b == b')').count() as u32;
+            if depth == 0 {
+                in_show = false;
+            }
+            continue;
+        }
+
+        if in_show {
+            let opens = trimmed.bytes().filter(|&b| b == b'(').count() as u32;
+            let closes = trimmed.bytes().filter(|&b| b == b')').count() as u32;
+            depth = depth + opens - closes;
+            if depth == 0 {
+                in_show = false;
+            }
+            continue;
+        }
+
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            continue;
+        }
+
+        count += line.split_whitespace().count();
+    }
+
+    Ok(count)
+}
+
+fn pdf_page_count(path: &Path) -> Result<usize> {
+    let content =
+        std::fs::read(path).with_context(|| format!("Failed to read PDF: {}", path.display()))?;
+
+    let text = String::from_utf8_lossy(&content);
+    let mut count = 0;
+    let mut start = 0;
+
+    while let Some(pos) = text[start..].find("/Type /Page") {
+        let abs = start + pos;
+        let after = abs + "/Type /Page".len();
+        if !text[after..].starts_with('s') {
+            count += 1;
+        }
+        start = after;
+    }
+
+    Ok(count)
 }
 
 fn is_pdf_up_to_date(typ_path: &Path) -> bool {

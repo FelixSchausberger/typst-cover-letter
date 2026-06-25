@@ -45,6 +45,18 @@ pub struct NewArgs {
     #[arg(long)]
     pub contact: Option<String>,
 
+    /// Sender name (default: interactive prompt)
+    #[arg(long)]
+    pub sender_name: Option<String>,
+
+    /// Sender street (default: sops secret or interactive prompt)
+    #[arg(long)]
+    pub sender_street: Option<String>,
+
+    /// Sender city (default: sops secret or interactive prompt)
+    #[arg(long)]
+    pub sender_city: Option<String>,
+
     /// Base directory for the new application folder (default: current dir)
     #[arg(long)]
     pub dir: Option<PathBuf>,
